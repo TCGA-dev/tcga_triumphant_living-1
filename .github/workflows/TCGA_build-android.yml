@@ -1,0 +1,78 @@
+name: Build TCGA Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_CHANNEL: stable
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Extract uploaded TCGA source package
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for package in TCGA_Triumphant_Living_Android_Build_Package.zip tcga_flutter_app_source.zip; do
+            if [ -f "$package" ]; then
+              unzip -o "$package" -d .
+            fi
+          done
+          if [ -f "tcga_flutter_app/pubspec.yaml" ]; then
+            echo "PROJECT_DIR=tcga_flutter_app" >> "$GITHUB_ENV"
+          elif [ -f "pubspec.yaml" ]; then
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          else
+            echo "Could not find pubspec.yaml. Upload the TCGA source ZIP or project files." >&2
+            exit 1
+          fi
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Generate Android platform project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter create --platforms=android --org com.tcga.global .
+
+      - name: Configure Supabase environment
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "Missing GitHub Actions secret SUPABASE_PUBLISHABLE_KEY" >&2
+            exit 1
+          fi
+          printf 'SUPABASE_URL=https://boxklothzymfdultubof.supabase.co\nSUPABASE_PUBLISHABLE_KEY=%s\n' "$SUPABASE_PUBLISHABLE_KEY" > .env
+
+      - name: Install packages
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter pub get
+
+      - name: Analyze Dart source
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter analyze
+
+      - name: Build release APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter build apk --release
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TCGA-Triumphant-Living-Android-APK
+          path: '**/build/app/outputs/flutter-apk/app-release.apk'
+          if-no-files-found: error
+          retention-days: 30
